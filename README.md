@@ -16,3 +16,24 @@ Updates may not be frequent, but improvements and additions will be made gradual
 - Store and track learning progress
 - Experiment with different Python ideas
 
+This is not a production-ready project.
+
+## Repository Contents
+This repository may include:
+- Basic Python programs
+- Practice exercises
+- Small experimental scripts
+- Incomplete or evolving code
+
+Some files may change or be unfinished.
+
+## Requirements
+- Python 3.x
+- Standard Python libraries
+
+Additional requirements will be mentioned if needed.
+
+## Notes
+- Code quality will improve over time
+- Some scripts may be incomplete or unoptimized
+- This repository is intended for educational purposes only
