@@ -1,11 +1,8 @@
-# client.py
-
 import socket
 import threading
 from cryptography.fernet import Fernet
 import struct
 
-# EncryptedSocket class (same as in server.py for consistency)
 class EncryptedSocket:
     def __init__(self, sock, key):
         self.sock = sock
@@ -48,78 +45,95 @@ class EncryptedSocket:
     def close(self):
         self.sock.close()
 
-def handle_local_connection(local_sock, addr, remote_host, remote_port, key, log_queue):
-    """
-    Handle a single local connection: Forward to remote over encrypted channel.
-    Does not parse SOCKS5; transparently forwards encrypted.
-    """
-    log_queue.put(f"Local connection from {addr}")
-    remote_sock = None
-    try:
-        remote_sock = socket.create_connection((remote_host, remote_port), timeout=10)
-        enc_remote = EncryptedSocket(remote_sock, key)
 
-        def relay_local_to_remote():
-            while True:
-                try:
-                    data = local_sock.recv(4096)
-                    if not data:
-                        break
-                    enc_remote.sendall(data)
-                except:
-                    break
-            try:
-                remote_sock.shutdown(socket.SHUT_WR)
-            except:
-                pass
+class VPNClient:
+    """GUI-compatible encrypted SOCKS5 client."""
+    def __init__(self, server_ip, server_port, key, log_callback=None, local_port=1080):
+        self.server_ip = server_ip
+        self.server_port = server_port
+        self.key = key
+        self.local_port = local_port
+        self.log = log_callback if log_callback else print
+        self.stop_event = threading.Event()
+        self.client_thread = None
 
-        t = threading.Thread(target=relay_local_to_remote)
-        t.daemon = True
-        t.start()
+    def start(self):
+        self.client_thread = threading.Thread(target=self._run, daemon=True)
+        self.client_thread.start()
+        self.log(f"Client starting on 127.0.0.1:{self.local_port}")
 
-        while True:
-            data = enc_remote.recv(4096)
-            if not data:
-                break
-            local_sock.sendall(data)
+    def stop(self):
+        self.stop_event.set()
+        self.log("Client stopped")
 
-        t.join()
-    except Exception as e:
-        log_queue.put(f"Error in client connection from {addr}: {e}")
-    finally:
-        local_sock.close()
-        if remote_sock:
-            remote_sock.close()
-        log_queue.put(f"Local connection closed from {addr}")
-
-def run_client(local_host, local_port, remote_host, remote_port, key, log_queue, stop_event):
-    """
-    Main client loop: Listen locally for SOCKS5 connections, forward each to remote.
-    """
-    client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    try:
-        client_sock.bind((local_host, local_port))
-        client_sock.listen(10)
-        log_queue.put(f"Client listening on {local_host}:{local_port}")
-    except Exception as e:
-        log_queue.put(f"Failed to start client: {e}")
-        return
-
-    while not stop_event.is_set():
+    def _run(self):
+        client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            client_sock.settimeout(1.0)
-            local_sock, addr = client_sock.accept()
-            t = threading.Thread(target=handle_local_connection, args=(local_sock, addr, remote_host, remote_port, key, log_queue))
+            client_sock.bind(("127.0.0.1", self.local_port))
+            client_sock.listen(10)
+            self.log(f"Client listening locally on 127.0.0.1:{self.local_port}")
+        except Exception as e:
+            self.log(f"Failed to start client: {e}")
+            return
+
+        while not self.stop_event.is_set():
+            try:
+                client_sock.settimeout(1.0)
+                local_sock, addr = client_sock.accept()
+                t = threading.Thread(
+                    target=self.handle_local_connection,
+                    args=(local_sock, addr),
+                    daemon=True
+                )
+                t.start()
+            except socket.timeout:
+                continue
+            except Exception as e:
+                self.log(f"Client error: {e}")
+                break
+
+        client_sock.close()
+        self.log("Client stopped")
+
+    def handle_local_connection(self, local_sock, addr):
+        self.log(f"Local connection from {addr}")
+        remote_sock = None
+        try:
+            remote_sock = socket.create_connection((self.server_ip, self.server_port), timeout=10)
+            enc_remote = EncryptedSocket(remote_sock, self.key)
+
+            # Relay local -> remote
+            def relay_local_to_remote():
+                while True:
+                    try:
+                        data = local_sock.recv(4096)
+                        if not data:
+                            break
+                        enc_remote.sendall(data)
+                    except:
+                        break
+                try:
+                    remote_sock.shutdown(socket.SHUT_WR)
+                except:
+                    pass
+
+            t = threading.Thread(target=relay_local_to_remote)
             t.daemon = True
             t.start()
-        except socket.timeout:
-            continue
+
+            # Relay remote -> local
+            while True:
+                data = enc_remote.recv(4096)
+                if not data:
+                    break
+                local_sock.sendall(data)
+
+            t.join()
         except Exception as e:
-            log_queue.put(f"Client error: {e}")
-            break
-
-    client_sock.close()
-    log_queue.put("Client stopped")
-
-# Limitations: Same as in server.py comments.
+            self.log(f"Error in client connection from {addr}: {e}")
+        finally:
+            local_sock.close()
+            if remote_sock:
+                remote_sock.close()
+            self.log(f"Local connection closed from {addr}")
