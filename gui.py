@@ -12,7 +12,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
 class VPNApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Academic Encrypted VPN Prototype")
+        self.root.title("VPN")
         self.root.geometry("600x400")
 
         # Initialize key
