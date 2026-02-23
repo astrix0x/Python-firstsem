@@ -21,11 +21,6 @@ from cryptography.fernet import Fernet, InvalidToken
 # ── Encryption ────────────────────────────────────────────────────────────────
 
 class EncryptedSocket:
-    """Wraps a TCP socket with AES-128 encryption (Fernet).
-    
-    Every message is sent as: [4-byte length][encrypted data]
-    This framing is needed because TCP is a stream with no message boundaries.
-    """
 
     def __init__(self, sock, key: bytes):
         self.sock   = sock
@@ -190,3 +185,39 @@ class VPNServer:
                 break
 
         self.log("Server stopped.")
+
+
+# ── Standalone entry point ────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import os
+    import argparse
+
+    parser = argparse.ArgumentParser(description="VPN Server")
+    parser.add_argument("--port", type=int, default=9000, help="Port to listen on (default: 9000)")
+    args = parser.parse_args()
+
+    # Load or generate key
+    KEY_FILE = "vpn.key"
+    if os.path.exists(KEY_FILE):
+        key = open(KEY_FILE, "rb").read().strip()
+        print(f"Loaded key from {KEY_FILE}")
+    else:
+        key = Fernet.generate_key()
+        open(KEY_FILE, "wb").write(key)
+        print(f"Generated new key -> saved to {KEY_FILE}")
+
+    print(f"Key: {key.decode()}")
+    print(f"Share this key with the client.")
+    print()
+
+    server = VPNServer(args.port, key, log=print)
+    server.start()
+
+    try:
+        import time
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        server.stop()
