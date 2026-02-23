@@ -1,169 +1,192 @@
+"""
+server.py - VPN Server
+Run this on Kali Linux.
+
+How it works:
+- Listens for encrypted connections from the client
+- Client sends SOCKS5 requests through the encrypted tunnel
+- Server connects to the real website on behalf of the client
+- All traffic exits from Kali's IP, not the client's IP
+
+Usage:
+    python3 server.py
+"""
+
 import socket
-import threading
 import struct
-import time
+import threading
 from cryptography.fernet import Fernet, InvalidToken
 
+
+# ── Encryption ────────────────────────────────────────────────────────────────
+
 class EncryptedSocket:
-    """Wrapper for socket with AES encryption using Fernet (same as your original)."""
-    def __init__(self, sock, key):
-        self.sock = sock
+    """Wraps a TCP socket with AES-128 encryption (Fernet).
+    
+    Every message is sent as: [4-byte length][encrypted data]
+    This framing is needed because TCP is a stream with no message boundaries.
+    """
+
+    def __init__(self, sock, key: bytes):
+        self.sock   = sock
         self.fernet = Fernet(key)
-        self.recv_buffer = b''
-        self.lock = threading.Lock()
 
-    def sendall(self, data):
-        while data:
-            chunk = data[:4096]
-            data = data[4096:]
-            encrypted = self.fernet.encrypt(chunk)
-            len_bytes = struct.pack('>I', len(encrypted))
-            self.sock.sendall(len_bytes + encrypted)
+    def send(self, data: bytes):
+        encrypted = self.fernet.encrypt(data)
+        self.sock.sendall(struct.pack(">I", len(encrypted)) + encrypted)
 
-    def recv(self, bufsize):
-        with self.lock:
-            while len(self.recv_buffer) < bufsize:
-                try:
-                    len_bytes = self._read_exact(4)
-                    length = struct.unpack('>I', len_bytes)[0]
-                    encrypted = self._read_exact(length)
-                    decrypted = self.fernet.decrypt(encrypted)
-                    self.recv_buffer += decrypted
-                except (EOFError, InvalidToken):
-                    break
-                except Exception:
-                    break
-            data = self.recv_buffer[:bufsize]
-            self.recv_buffer = self.recv_buffer[bufsize:]
-            return data
+    def recv(self) -> bytes:
+        length = struct.unpack(">I", self._read_exact(4))[0]
+        return self.fernet.decrypt(self._read_exact(length))
 
-    def _read_exact(self, n):
-        buf = b''
+    def _read_exact(self, n: int) -> bytes:
+        buf = b""
         while len(buf) < n:
-            more = self.sock.recv(n - len(buf))
-            if not more:
-                raise EOFError("Unexpected end of stream")
-            buf += more
+            chunk = self.sock.recv(n - len(buf))
+            if not chunk:
+                raise EOFError("Connection closed")
+            buf += chunk
         return buf
 
     def close(self):
-        self.sock.close()
+        try:
+            self.sock.close()
+        except OSError:
+            pass
 
+
+# ── Client handler ────────────────────────────────────────────────────────────
+
+def handle_client(client_sock, addr, key, log):
+    log(f"Connection from {addr[0]}:{addr[1]}")
+    enc      = EncryptedSocket(client_sock, key)
+    dst_sock = None
+
+    try:
+        # SOCKS5 greeting: VER NMETHODS METHODS...
+        header = enc.recv()
+        if not header or header[0] != 5:
+            raise ValueError("Not a SOCKS5 connection")
+        enc.send(b"\x05\x00")  # accept, no auth
+
+        # SOCKS5 request: VER CMD RSV ATYP [addr] PORT
+        req = enc.recv()
+        if len(req) < 4 or req[0] != 5 or req[1] != 1:
+            raise ValueError("Only SOCKS5 CONNECT supported")
+
+        atyp = req[3]
+        if atyp == 1:      # IPv4 - 4 bytes
+            dst_host = socket.inet_ntoa(req[4:8])
+            dst_port = struct.unpack(">H", req[8:10])[0]
+        elif atyp == 3:    # Domain - 1 byte length + domain
+            dlen     = req[4]
+            dst_host = req[5:5 + dlen].decode()
+            dst_port = struct.unpack(">H", req[5 + dlen:7 + dlen])[0]
+        elif atyp == 4:    # IPv6 - 16 bytes
+            dst_host = socket.inet_ntop(socket.AF_INET6, req[4:20])
+            dst_port = struct.unpack(">H", req[20:22])[0]
+        else:
+            raise ValueError(f"Unknown address type: {atyp}")
+
+        log(f"  {addr[0]} -> {dst_host}:{dst_port}")
+
+        # Connect to real destination
+        dst_sock = socket.create_connection((dst_host, dst_port), timeout=10)
+
+        # SOCKS5 success reply
+        enc.send(b"\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00")
+
+        # Relay traffic in both directions
+        stop = threading.Event()
+
+        def client_to_dst():
+            while not stop.is_set():
+                try:
+                    data = enc.recv()
+                    if not data:
+                        break
+                    dst_sock.sendall(data)
+                except Exception:
+                    break
+            stop.set()
+
+        def dst_to_client():
+            while not stop.is_set():
+                try:
+                    data = dst_sock.recv(4096)
+                    if not data:
+                        break
+                    enc.send(data)
+                except Exception:
+                    break
+            stop.set()
+
+        t1 = threading.Thread(target=client_to_dst, daemon=True)
+        t2 = threading.Thread(target=dst_to_client, daemon=True)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+    except Exception as e:
+        log(f"Error ({addr[0]}): {e}")
+    finally:
+        enc.close()
+        if dst_sock:
+            try:
+                dst_sock.close()
+            except OSError:
+                pass
+        log(f"Closed {addr[0]}:{addr[1]}")
+
+
+# ── Server ────────────────────────────────────────────────────────────────────
 
 class VPNServer:
-    """GUI-compatible encrypted SOCKS5 server."""
-    def __init__(self, host, port, key, log_callback=None):
-        self.host = host
-        self.port = port
-        self.key = key
-        self.log = log_callback if log_callback else print
-        self.stop_event = threading.Event()
-        self.server_thread = None
-        self.server_sock = None
-        self.clients = {}
-        self.clients_lock = threading.Lock()
+    def __init__(self, port: int, key: bytes, log=None):
+        self.port  = port
+        self.key   = key
+        self.log   = log or print
+        self._stop = threading.Event()
+        self._sock = None
 
     def start(self):
-        self.server_thread = threading.Thread(target=self._run, daemon=True)
-        self.server_thread.start()
-        self.log(f"Server starting on {self.host}:{self.port}")
+        self._stop.clear()
+        threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self):
-        self.stop_event.set()
-        if self.server_sock:
-            self.server_sock.close()
-        self.log("Server stopped")
+        self._stop.set()
+        if self._sock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
 
     def _run(self):
-        self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            self.server_sock.bind((self.host, self.port))
-            self.server_sock.listen(5)
-        except Exception as e:
-            self.log(f"Failed to start server: {e}")
+            self._sock.bind(("0.0.0.0", self.port))
+            self._sock.listen(10)
+        except OSError as e:
+            self.log(f"Cannot start server: {e}")
             return
 
-        self.log(f"Server listening on {self.host}:{self.port}")
+        self.log(f"Server started on port {self.port}")
+        self.log(f"Waiting for client connections...")
 
-        while not self.stop_event.is_set():
+        while not self._stop.is_set():
             try:
-                self.server_sock.settimeout(1.0)
-                client_sock, addr = self.server_sock.accept()
-                with self.clients_lock:
-                    self.clients[addr] = time.time()
-                t = threading.Thread(
-                    target=self.handle_connection,
-                    args=(client_sock, addr),
+                self._sock.settimeout(1.0)
+                conn, addr = self._sock.accept()
+                threading.Thread(
+                    target=handle_client,
+                    args=(conn, addr, self.key, self.log),
                     daemon=True
-                )
-                t.start()
+                ).start()
             except socket.timeout:
                 continue
-            except Exception as e:
-                self.log(f"Server error: {e}")
+            except OSError:
                 break
 
-    def handle_connection(self, client_sock, addr):
-        self.log(f"New connection from {addr}")
-        enc_sock = EncryptedSocket(client_sock, self.key)
-        dest_sock = None
-        try:
-            # SOCKS5 handshake
-            data = enc_sock.recv(2)
-            if len(data) < 2 or data[0] != 5:
-                raise ValueError("Invalid SOCKS5 version")
-            nmethods = data[1]
-            enc_sock.recv(nmethods)
-            enc_sock.sendall(b'\x05\x00')
-
-            # SOCKS5 request
-            data = enc_sock.recv(4)
-            if len(data) < 4:
-                raise ValueError("Incomplete request")
-            version, cmd, rsv, atyp = data
-            if version != 5 or cmd != 1:
-                raise ValueError("Unsupported command")
-
-            if atyp == 1:  # IPv4
-                addr_b = enc_sock.recv(4)
-                dest_addr = socket.inet_ntoa(addr_b)
-            elif atyp == 3:  # Domain
-                len_b = enc_sock.recv(1)
-                dest_addr = enc_sock.recv(ord(len_b)).decode()
-            else:
-                raise ValueError("Unsupported address type")
-
-            port_b = enc_sock.recv(2)
-            dest_port = struct.unpack('>H', port_b)[0]
-
-            self.log(f"Connecting to {dest_addr}:{dest_port}")
-            dest_sock = socket.create_connection((dest_addr, dest_port), timeout=10)
-
-            enc_sock.sendall(b'\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00')
-
-            # Bidirectional relay
-            def relay(a, b):
-                while True:
-                    try:
-                        data = a.recv(4096)
-                        if not data:
-                            break
-                        b.sendall(data)
-                    except:
-                        break
-
-            t1 = threading.Thread(target=relay, args=(enc_sock, dest_sock))
-            t1.start()
-            relay(dest_sock, enc_sock)
-            t1.join()
-
-        except Exception as e:
-            self.log(f"Error with {addr}: {e}")
-        finally:
-            client_sock.close()
-            if dest_sock:
-                dest_sock.close()
-            self.log(f"Connection closed from {addr}")
-            with self.clients_lock:
-                self.clients.pop(addr, None)
+        self.log("Server stopped.")

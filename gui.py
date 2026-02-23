@@ -1,133 +1,323 @@
+"""
+gui.py - VPN
+Plain Tkinter GUI - run this on both machines.
+
+On Kali:    use the Server tab
+On Windows: use the Client tab
+"""
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
-import logging
+import threading
+import queue
+import os
 from cryptography.fernet import Fernet
+
 from server import VPNServer
 from client import VPNClient
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+KEY_FILE = "vpn.key"
 
 
-class VPNApp:
+class App:
     def __init__(self, root):
         self.root = root
         self.root.title("VPN")
-        self.root.geometry("600x400")
+        self.root.geometry("500x460")
+        self.root.resizable(False, False)
 
-        # Initialize key
-        self.key = Fernet.generate_key()
+        self._server = None
+        self._client = None
+        self._key    = None
+        self._queue  = queue.Queue()
 
-        self.server = None
-        self.client = None
+        self._build()
+        self._poll()
+        self._load_key()
 
-        # Notebook tabs
-        self.notebook = ttk.Notebook(root)
-        self.notebook.pack(expand=True, fill="both")
+    # ── Build UI ──────────────────────────────────────────────────────────────
 
-        self.server_tab = ttk.Frame(self.notebook)
-        self.client_tab = ttk.Frame(self.notebook)
+    def _build(self):
+        nb = ttk.Notebook(self.root)
+        nb.pack(fill="both", expand=True, padx=6, pady=6)
 
-        self.notebook.add(self.server_tab, text="Server")
-        self.notebook.add(self.client_tab, text="Client")
+        srv_tab = ttk.Frame(nb)
+        cli_tab = ttk.Frame(nb)
+        nb.add(srv_tab, text="Server")
+        nb.add(cli_tab, text="Client")
 
-        # Build GUI
-        self.build_server_tab()
-        self.build_client_tab()
+        self._build_server(srv_tab)
+        self._build_client(cli_tab)
 
-    # ---------------- Server Tab ----------------
-    def build_server_tab(self):
-        frame = self.server_tab
+        # Status bar at the bottom
+        self._status = tk.StringVar(value="Ready.")
+        tk.Label(self.root, textvariable=self._status,
+                 relief="sunken", anchor="w",
+                 font=("TkDefaultFont", 8)).pack(
+            fill="x", side="bottom")
 
-        ttk.Label(frame, text="Server Port:").pack(pady=5)
-        self.server_port_entry = ttk.Entry(frame)
-        self.server_port_entry.insert(0, "9000")
-        self.server_port_entry.pack(pady=5)
+    def _build_server(self, f):
+        # Info
+        tk.Label(f, text="Run this on Kali Linux (the host machine).",
+                 justify="left").pack(anchor="w", padx=10, pady=(10, 2))
+        tk.Label(f,
+                 text="Start the server, then copy the key and give it to the client.",
+                 justify="left", foreground="grey").pack(anchor="w", padx=10)
 
-        ttk.Button(frame, text="Start Server", command=self.start_server).pack(pady=5)
-        ttk.Button(frame, text="Stop Server", command=self.stop_server).pack(pady=5)
-        ttk.Button(frame, text="Generate New Key", command=self.generate_key).pack(pady=5)
+        ttk.Separator(f, orient="horizontal").pack(fill="x", padx=10, pady=8)
 
-        ttk.Label(frame, text="Server Logs:").pack(pady=5)
-        self.server_log = scrolledtext.ScrolledText(frame, height=10)
-        self.server_log.pack(expand=True, fill="both", padx=5, pady=5)
+        # Port
+        row = tk.Frame(f)
+        row.pack(anchor="w", padx=10)
+        tk.Label(row, text="Port:", width=10, anchor="w").pack(side="left")
+        self._srv_port = tk.StringVar(value="9000")
+        tk.Entry(row, textvariable=self._srv_port, width=10).pack(side="left")
 
-    # ---------------- Client Tab ----------------
-    def build_client_tab(self):
-        frame = self.client_tab
+        # Buttons
+        btn = tk.Frame(f)
+        btn.pack(anchor="w", padx=10, pady=6)
+        self._btn_srv_start = tk.Button(btn, text="Start Server",
+                                        command=self._start_server, width=14)
+        self._btn_srv_start.pack(side="left", padx=(0, 4))
+        self._btn_srv_stop = tk.Button(btn, text="Stop Server",
+                                       command=self._stop_server,
+                                       width=14, state="disabled")
+        self._btn_srv_stop.pack(side="left")
 
-        ttk.Label(frame, text="Server IP:").pack(pady=5)
-        self.client_ip_entry = ttk.Entry(frame)
-        self.client_ip_entry.insert(0, "127.0.0.1")
-        self.client_ip_entry.pack(pady=5)
+        # Status label
+        self._srv_status = tk.StringVar(value="Stopped")
+        tk.Label(f, textvariable=self._srv_status).pack(anchor="w", padx=10)
 
-        ttk.Label(frame, text="Server Port:").pack(pady=5)
-        self.client_port_entry = ttk.Entry(frame)
-        self.client_port_entry.insert(0, "9000")
-        self.client_port_entry.pack(pady=5)
+        ttk.Separator(f, orient="horizontal").pack(fill="x", padx=10, pady=8)
 
-        ttk.Button(frame, text="Start Client", command=self.start_client).pack(pady=5)
-        ttk.Button(frame, text="Stop Client", command=self.stop_client).pack(pady=5)
+        # Key
+        tk.Label(f, text="Encryption Key:").pack(anchor="w", padx=10)
+        key_row = tk.Frame(f)
+        key_row.pack(fill="x", padx=10, pady=4)
+        self._key_var = tk.StringVar()
+        tk.Entry(key_row, textvariable=self._key_var,
+                 state="readonly", font=("Courier", 8)).pack(
+            side="left", fill="x", expand=True)
+        tk.Button(key_row, text="Copy",
+                  command=self._copy_key, width=6).pack(side="left", padx=(4, 0))
 
-        ttk.Label(frame, text="Client Logs:").pack(pady=5)
-        self.client_log = scrolledtext.ScrolledText(frame, height=10)
-        self.client_log.pack(expand=True, fill="both", padx=5, pady=5)
+        tk.Button(f, text="Generate New Key",
+                  command=self._new_key).pack(anchor="w", padx=10, pady=(0, 4))
 
-    # ---------------- Key Generation ----------------
-    def generate_key(self):
-        self.key = Fernet.generate_key()
-        messagebox.showinfo("Key Generated", f"New AES Key Generated:\n{self.key.decode()}")
+        ttk.Separator(f, orient="horizontal").pack(fill="x", padx=10, pady=4)
 
-    # ---------------- Server Control ----------------
-    def start_server(self):
+        # Log
+        tk.Label(f, text="Log:").pack(anchor="w", padx=10)
+        self._srv_log = scrolledtext.ScrolledText(
+            f, height=7, state="disabled", font=("Courier", 8))
+        self._srv_log.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+
+    def _build_client(self, f):
+        # Info
+        tk.Label(f, text="Run this on the Windows VM.",
+                 justify="left").pack(anchor="w", padx=10, pady=(10, 2))
+        tk.Label(f,
+                 text="After connecting, set Firefox SOCKS5 proxy to 127.0.0.1:1080.",
+                 justify="left", foreground="grey").pack(anchor="w", padx=10)
+
+        ttk.Separator(f, orient="horizontal").pack(fill="x", padx=10, pady=8)
+
+        # Fields
+        fields = tk.Frame(f)
+        fields.pack(anchor="w", padx=10)
+
+        tk.Label(fields, text="Server IP:",
+                 width=12, anchor="w").grid(row=0, column=0, pady=3)
+        self._cli_ip = tk.StringVar(value="")
+        tk.Entry(fields, textvariable=self._cli_ip,
+                 width=22).grid(row=0, column=1, sticky="w")
+        tk.Label(fields, text="(Kali machine IP)",
+                 foreground="grey",
+                 font=("TkDefaultFont", 8)).grid(row=0, column=2, padx=6)
+
+        tk.Label(fields, text="Server Port:",
+                 width=12, anchor="w").grid(row=1, column=0, pady=3)
+        self._cli_port = tk.StringVar(value="9000")
+        tk.Entry(fields, textvariable=self._cli_port,
+                 width=8).grid(row=1, column=1, sticky="w")
+
+        tk.Label(fields, text="Local Port:",
+                 width=12, anchor="w").grid(row=2, column=0, pady=3)
+        self._cli_local = tk.StringVar(value="1080")
+        tk.Entry(fields, textvariable=self._cli_local,
+                 width=8).grid(row=2, column=1, sticky="w")
+        tk.Label(fields, text="(browser proxy port)",
+                 foreground="grey",
+                 font=("TkDefaultFont", 8)).grid(row=2, column=2, padx=6)
+
+        tk.Label(fields, text="Key:",
+                 width=12, anchor="w").grid(row=3, column=0, pady=3)
+        self._cli_key = tk.StringVar()
+        tk.Entry(fields, textvariable=self._cli_key,
+                 font=("Courier", 8), width=36).grid(row=3, column=1,
+                                                      columnspan=2, sticky="w")
+        tk.Label(fields, text="Paste key from Server tab",
+                 foreground="grey",
+                 font=("TkDefaultFont", 8)).grid(row=4, column=1, sticky="w")
+
+        # Buttons
+        btn = tk.Frame(f)
+        btn.pack(anchor="w", padx=10, pady=6)
+        self._btn_cli_start = tk.Button(btn, text="Connect",
+                                        command=self._start_client, width=14)
+        self._btn_cli_start.pack(side="left", padx=(0, 4))
+        self._btn_cli_stop = tk.Button(btn, text="Disconnect",
+                                       command=self._stop_client,
+                                       width=14, state="disabled")
+        self._btn_cli_stop.pack(side="left")
+
+        # Status
+        self._cli_status = tk.StringVar(value="Disconnected")
+        tk.Label(f, textvariable=self._cli_status).pack(anchor="w", padx=10)
+
+        ttk.Separator(f, orient="horizontal").pack(fill="x", padx=10, pady=6)
+
+        # Log
+        tk.Label(f, text="Log:").pack(anchor="w", padx=10)
+        self._cli_log = scrolledtext.ScrolledText(
+            f, height=7, state="disabled", font=("Courier", 8))
+        self._cli_log.pack(fill="both", expand=True, padx=10, pady=(0, 6))
+
+    # ── Server actions ────────────────────────────────────────────────────────
+
+    def _start_server(self):
         try:
-            port = int(self.server_port_entry.get().strip())
-            if not (1 <= port <= 65535):
-                raise ValueError("Port must be 1-65535")
-            self.server = VPNServer("0.0.0.0", port, self.key, log_callback=self.log_server)
-            self.server.start()
-            self.log_server(f"Server started on port {port}")
-        except ValueError as e:
-            messagebox.showerror("Invalid Port", str(e))
+            port = int(self._srv_port.get().strip())
+            assert 1 <= port <= 65535
+        except Exception:
+            messagebox.showerror("Error", "Enter a valid port number (1-65535).")
+            return
 
-    def stop_server(self):
-        if self.server:
-            self.server.stop()
-            self.log_server("Server stopped")
-            self.server = None
+        if not self._key:
+            self._load_or_create_key()
 
-    # ---------------- Client Control ----------------
-    def start_client(self):
+        def log(msg):
+            self._queue.put(("srv", msg))
+
+        self._server = VPNServer(port, self._key, log=log)
+        self._server.start()
+
+        self._srv_status.set("Running on port " + str(port))
+        self._btn_srv_start.config(state="disabled")
+        self._btn_srv_stop.config(state="normal")
+        self._status.set(f"Server running on port {port}.")
+
+    def _stop_server(self):
+        if self._server:
+            self._server.stop()
+            self._server = None
+        self._srv_status.set("Stopped")
+        self._btn_srv_start.config(state="normal")
+        self._btn_srv_stop.config(state="disabled")
+        self._status.set("Server stopped.")
+
+    # ── Client actions ────────────────────────────────────────────────────────
+
+    def _start_client(self):
+        ip = self._cli_ip.get().strip()
+        if not ip:
+            messagebox.showerror("Error",
+                                 "Enter the Kali machine IP address.\n"
+                                 "Find it on Kali by running:  ip a")
+            return
+
         try:
-            ip = self.client_ip_entry.get().strip()
-            port = int(self.client_port_entry.get().strip())
-            if not (1 <= port <= 65535):
-                raise ValueError("Port must be 1-65535")
-            self.client = VPNClient(ip, port, self.key, log_callback=self.log_client)
-            self.client.start()
-            self.log_client(f"Client started, connecting to {ip}:{port}")
-        except ValueError as e:
-            messagebox.showerror("Invalid Input", str(e))
+            port       = int(self._cli_port.get().strip())
+            local_port = int(self._cli_local.get().strip())
+            assert 1 <= port <= 65535
+            assert 1 <= local_port <= 65535
+        except Exception:
+            messagebox.showerror("Error", "Enter valid port numbers.")
+            return
 
-    def stop_client(self):
-        if self.client:
-            self.client.stop()
-            self.log_client("Client stopped")
-            self.client = None
+        raw_key = self._cli_key.get().strip()
+        if not raw_key:
+            messagebox.showerror("Error",
+                                 "Paste the encryption key.\n"
+                                 "Copy it from the Server tab on Kali.")
+            return
+        try:
+            key = raw_key.encode()
+            Fernet(key)  # validate format
+        except Exception:
+            messagebox.showerror("Error",
+                                 "The key is invalid.\n"
+                                 "Copy it exactly from the Server tab.")
+            return
 
-    # ---------------- Logging ----------------
-    def log_server(self, msg):
-        self.server_log.insert(tk.END, f"{msg}\n")
-        self.server_log.see(tk.END)
-        logging.info(msg)
+        def log(msg):
+            self._queue.put(("cli", msg))
 
-    def log_client(self, msg):
-        self.client_log.insert(tk.END, f"{msg}\n")
-        self.client_log.see(tk.END)
-        logging.info(msg)
+        self._client = VPNClient(ip, port, key, local_port, log=log)
+        self._client.start()
+
+        self._cli_status.set("Connected to " + ip)
+        self._btn_cli_start.config(state="disabled")
+        self._btn_cli_stop.config(state="normal")
+        self._status.set(
+            f"Connected. Set Firefox SOCKS5 proxy to 127.0.0.1:{local_port}")
+
+    def _stop_client(self):
+        if self._client:
+            self._client.stop()
+            self._client = None
+        self._cli_status.set("Disconnected")
+        self._btn_cli_start.config(state="normal")
+        self._btn_cli_stop.config(state="disabled")
+        self._status.set("Disconnected.")
+
+    # ── Key management ────────────────────────────────────────────────────────
+
+    def _load_key(self):
+        """Load key from vpn.key if it exists."""
+        if os.path.exists(KEY_FILE):
+            self._key = open(KEY_FILE, "rb").read().strip()
+            self._key_var.set(self._key.decode())
+
+    def _load_or_create_key(self):
+        """Load existing key or generate a new one."""
+        if os.path.exists(KEY_FILE):
+            self._key = open(KEY_FILE, "rb").read().strip()
+        else:
+            self._key = Fernet.generate_key()
+            open(KEY_FILE, "wb").write(self._key)
+        self._key_var.set(self._key.decode())
+
+    def _new_key(self):
+        self._key = Fernet.generate_key()
+        open(KEY_FILE, "wb").write(self._key)
+        self._key_var.set(self._key.decode())
+        self._status.set("New key generated.")
+
+    def _copy_key(self):
+        key = self._key_var.get().strip()
+        if len(key) > 10:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(key)
+            self._status.set("Key copied to clipboard.")
+        else:
+            messagebox.showinfo("No key",
+                                "Start the server first to generate a key.")
+
+    # ── Log polling (thread-safe) ─────────────────────────────────────────────
+
+    def _poll(self):
+        while not self._queue.empty():
+            target, msg = self._queue.get_nowait()
+            widget = self._srv_log if target == "srv" else self._cli_log
+            widget.config(state="normal")
+            widget.insert(tk.END, msg + "\n")
+            widget.see(tk.END)
+            widget.config(state="disabled")
+        self.root.after(100, self._poll)
 
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = VPNApp(root)
+    App(root)
     root.mainloop()
