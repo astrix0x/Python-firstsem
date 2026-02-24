@@ -146,8 +146,7 @@ class App:
             f, height=7, state="disabled", font=("Courier", 8))
         self._cli_log.pack(fill="both", expand=True, padx=10, pady=(0, 6))
 
-    # ── Server actions ────────────────────────────────────────────────────────
-
+    #  Server actions
     def _start_server(self):
         try:
             port = int(self._srv_port.get().strip())
@@ -179,8 +178,7 @@ class App:
         self._btn_srv_stop.config(state="disabled")
         self._status.set("Server stopped.")
 
-    # ── Client actions ────────────────────────────────────────────────────────
-
+    # Client actions 
     def _start_client(self):
         ip = self._cli_ip.get().strip()
         if not ip:
@@ -227,7 +225,7 @@ class App:
         self._btn_cli_stop.config(state="disabled")
         self._status.set("Disconnected.")
 
-    # ── Key management ────────────────────────────────────────────────────────
+    # Key management
 
     def _load_key(self):
         if os.path.exists(KEY_FILE):
@@ -257,7 +255,7 @@ class App:
         else:
             messagebox.showinfo("No key", "Start the server first to generate a key.")
 
-    # ── Exit ──────────────────────────────────────────────────────────────────
+    # Exit 
 
     def _exit(self):
         if self._server:
@@ -266,7 +264,7 @@ class App:
             self._client.stop()
         self.root.destroy()
 
-    # ── Log polling ───────────────────────────────────────────────────────────
+    # Log polling 
 
     def _poll(self):
         while not self._queue.empty():

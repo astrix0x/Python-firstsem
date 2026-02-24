@@ -36,7 +36,7 @@ class EncryptedSocket:
             pass
 
 
-# ── Per-connection handler ────────────────────────────────────────────────────
+# Per-connection handler
 
 def handle_browser(browser_sock, addr, server_ip, server_port, key, log):
     """Handle one browser connection — tunnel it through the VPN server."""
@@ -44,7 +44,7 @@ def handle_browser(browser_sock, addr, server_ip, server_port, key, log):
     tunnel = None
 
     try:
-        # Open encrypted tunnel to VPN server on Kali
+        # Open encrypted tunnel to VPN server
         raw = socket.create_connection((server_ip, server_port), timeout=10)
         tunnel = EncryptedSocket(raw, key)
 
@@ -141,8 +141,7 @@ def _read_socks5_request(sock):
     return header + rest
 
 
-# ── Client ────────────────────────────────────────────────────────────────────
-
+# Client 
 class VPNClient:
     def __init__(self, server_ip, server_port, key, local_port=1080, log=None):
         self.server_ip   = server_ip

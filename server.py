@@ -4,7 +4,7 @@ import threading
 from cryptography.fernet import Fernet, InvalidToken
 
 
-# ── Encryption ────────────────────────────────────────────────────────────────
+# Encryption 
 
 class EncryptedSocket:
 
@@ -36,15 +36,14 @@ class EncryptedSocket:
             pass
 
 
-# ── Client handler ────────────────────────────────────────────────────────────
-
+# Client handler
 def handle_client(client_sock, addr, key, log):
     log(f"Connection from {addr[0]}:{addr[1]}")
     enc      = EncryptedSocket(client_sock, key)
     dst_sock = None
 
     try:
-        # SOCKS5 greeting: VER NMETHODS METHODS...
+        # SOCKS5 greeting
         header = enc.recv()
         if not header or header[0] != 5:
             raise ValueError("Not a SOCKS5 connection")
@@ -121,8 +120,7 @@ def handle_client(client_sock, addr, key, log):
         log(f"Closed {addr[0]}:{addr[1]}")
 
 
-# ── Server ────────────────────────────────────────────────────────────────────
-
+# Server 
 class VPNServer:
     def __init__(self, port: int, key: bytes, log=None):
         self.port  = port
@@ -173,7 +171,7 @@ class VPNServer:
         self.log("Server stopped.")
 
 
-# ── Standalone entry point ────────────────────────────────────────────────────
+# Standalone entry point 
 
 if __name__ == "__main__":
     import os
