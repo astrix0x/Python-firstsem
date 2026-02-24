@@ -1,17 +1,3 @@
-"""
-server.py - VPN Server
-Run this on Kali Linux.
-
-How it works:
-- Listens for encrypted connections from the client
-- Client sends SOCKS5 requests through the encrypted tunnel
-- Server connects to the real website on behalf of the client
-- All traffic exits from Kali's IP, not the client's IP
-
-Usage:
-    python3 server.py
-"""
-
 import socket
 import struct
 import threading
@@ -70,14 +56,14 @@ def handle_client(client_sock, addr, key, log):
             raise ValueError("Only SOCKS5 CONNECT supported")
 
         atyp = req[3]
-        if atyp == 1:      # IPv4 - 4 bytes
+        if atyp == 1:      
             dst_host = socket.inet_ntoa(req[4:8])
             dst_port = struct.unpack(">H", req[8:10])[0]
-        elif atyp == 3:    # Domain - 1 byte length + domain
+        elif atyp == 3:   
             dlen     = req[4]
             dst_host = req[5:5 + dlen].decode()
             dst_port = struct.unpack(">H", req[5 + dlen:7 + dlen])[0]
-        elif atyp == 4:    # IPv6 - 16 bytes
+        elif atyp == 4:  
             dst_host = socket.inet_ntop(socket.AF_INET6, req[4:20])
             dst_port = struct.unpack(">H", req[20:22])[0]
         else:

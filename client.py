@@ -1,30 +1,9 @@
-"""
-client.py - VPN Client
-Run this on Windows VM.
-
-How it works:
-- Listens locally as a SOCKS5 proxy on 127.0.0.1:1080
-- When your browser connects through it, traffic is encrypted
-  and sent to the VPN server on Kali
-- The server forwards it to the internet from Kali's IP
-- Your Windows VM's real IP is never seen by websites
-
-After connecting, set Firefox proxy:
-  Settings -> Network Settings -> Manual proxy
-  SOCKS5: 127.0.0.1  Port: 1080
-  Tick: Proxy DNS over SOCKS5
-
-Usage:
-    python3 client.py
-"""
-
 import socket
 import struct
 import threading
 from cryptography.fernet import Fernet, InvalidToken
 
 
-# ── Encryption (same as server) ───────────────────────────────────────────────
 
 class EncryptedSocket:
     """Wraps a TCP socket with AES-128 encryption (Fernet)."""
