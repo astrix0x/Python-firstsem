@@ -9,7 +9,8 @@ LABEL org.opencontainers.image.description="Secure VPN Tunnel - Encrypted SOCKS5
 LABEL org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    PORT=9999
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
