@@ -6,9 +6,7 @@ Built as part of BSc(Hons) Ethical Hacking and Cybersecurity — Introduction to
 
 ---
 
-##  Video and Repository Link
-
-**Video Link:** *will paste soon...*
+## Repository Link
 
 **GitHub Repository:** https://github.com/astrix0x/Python-firstsem
 
