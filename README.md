@@ -156,6 +156,28 @@ sudo docker run -p 8888:8888 -e PORT=8888 vpn-server
 ```
 
 ---
+## Don't Have Firefox? Use Chrome or Edge Instead
+
+If you do not want to install Firefox, you can use Chrome or Edge instead.
+However you will need to launch them from the terminal with a special command.
+
+### On Chrome:
+1. Close Chrome completely if it is already open
+2. Open a terminal and run:
+```bash
+chrome --proxy-server="socks5://127.0.0.1:1080"
+```
+
+### On Edge:
+1. Close Edge completely if it is already open
+2. Open a terminal and run:
+```bash
+msedge --proxy-server="socks5://127.0.0.1:1080"
+```
+
+> **Note:** Firefox is recommended because it has built in SOCKS5 proxy settings that are simple to configure. Chrome and Edge require launching from the terminal with a special command every time you want to use the VPN.
+
+---
 
 ## Using the Application
 
