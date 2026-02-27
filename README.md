@@ -268,4 +268,4 @@ In simple words: you are free to use, copy, and modify this project as long as y
 
 ## Author
 
-Built by Aashish Acharya(astrix0x) first year BSc(Hons) Ethical Hacking and Cybersecurity student at Softwarica College of IT & E-Commerce (Affiliated with Coventry University)
+Built by Aashish Acharya(astrix0x) a first year BSc.(Hons) Ethical Hacking and Cybersecurity student at Softwarica College of IT & E-Commerce (Affiliated with Coventry University)
